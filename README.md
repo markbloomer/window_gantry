@@ -4,6 +4,8 @@ A simplified planar stage modeled in Blender. A carriage rides two horizontal be
 
 The fixed frame is 48 × 6 × 72. Carriage travel is X −15.82 to 15.16 and beam height 8.39 to 69.78. Pan and tilt each travel ±45°. Dimensions, clearances, and the motion loop are in [docs/specification.md](docs/specification.md).
 
+![Carriage and camera at the left vertical beam](docs/window_gantry_1.png)
+
 ## Layout
 
 | Path | Contents |
@@ -13,6 +15,7 @@ The fixed frame is 48 × 6 × 72. Carriage travel is X −15.82 to 15.16 and bea
 | `renders/gantry_still.png` | Three-quarter still |
 | `renders/pose_BL.png`, `pose_TL.png`, `pose_TR.png`, `pose_BR.png` | The four corners of the travel box |
 | `docs/specification.md` | As-built dimensions |
+| `docs/window_gantry_1.png` | Close-up of the carriage, camera, and end bracket |
 
 ## Rebuild
 
