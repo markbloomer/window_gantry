@@ -10,21 +10,21 @@ The fixed frame is 48 wide × 6 deep × 72 tall.
 
 | Axis | Frame | Carriage travel |
 | --- | --- | --- |
-| X | −24 to 24 | −15.82 to 15.16 |
+| X | −24 to 24 | −17.77 to 17.11 |
 | Y | −3 to 3 | Camera head may swing past ±3 |
 | Z | 0 to 72 | Beam axis 8.39 to 69.78 |
 
 The left limit is set by the 23 mm tilt motor: at pan 0 its outboard face stays about 0.12 in clear of the left vertical beam. The right limit is set by the camera swing, with the same clearance to the right beam. Vertical travel keeps the carriage off the base plate and the underside of the top plate.
 
-Home is the bottom-left corner: X = −15.82, Z = 8.39.
+Home is the bottom-left corner: X = −17.77, Z = 8.39.
 
 ## Assumptions
 
 - Beams and drive axles are rigid.
 - Belts do not stretch.
-- Motors drive without extra reduction. The pan pair is 1:1.
+- The vertical lift is a 5:1 worm. The horizontal belt is direct. The pan pair is 1:1.
 - Control software and wiring are out of scope and do not change the range.
-- No component may overlap another anywhere in the travel box. The camera head is allowed outside the 6 in depth.
+- No component may overlap another anywhere in the travel box. The camera head may swing past the 6 in depth. The upright lift motor may hang past the front of that depth.
 
 ## Frame
 
@@ -32,9 +32,9 @@ Home is the bottom-left corner: X = −15.82, Z = 8.39.
 | --- | --- | --- |
 | Bottom plate | 48 × 6 × 0.5 | Center Z = 0.25 |
 | Top plate | 48 × 6 × 0.5 | Center Z = 71.75 |
-| Vertical beams | Ø1.3125, length 71.04 | Centers X = ±20.35, Y = −0.40, Z = 36 |
+| Vertical beams | Ø1.3125, length 71.04 | Centers X = ±22.30, Y = −0.40, Z = 36 |
 
-Inner face of each vertical beam is at X = ±19.694. A GT2 belt is fixed on the front of each beam (teeth toward +Y). The belt is split into a lower run and an upper run; the gap between them follows the gantry.
+Inner face of each vertical beam is at X = ±21.644. A 15 mm wide, 3 mm pitch belt is fixed on the front of each beam (teeth toward +Y). The belt is split into a lower run and an upper run; the gap between them follows the gantry.
 
 ## Gantry beams and wheels
 
@@ -43,7 +43,7 @@ Inner face of each vertical beam is at X = ±19.694. A GT2 belt is fixed on the 
 | Horizontal beams | Ø1.125 |
 | Front beam center Y | −1.645 |
 | Rear beam center Y | 1.345 |
-| Beam ends | X = ±19.692 |
+| Beam ends | X = ±21.642 |
 | Gap between beam faces and a NEMA 17 body | 0.10 |
 
 Both beams stop at the inner vertical-wheel pillow blocks. A bracket at each end continues out to the outer wheel and the vertical motor.
@@ -55,7 +55,7 @@ Vertical crowned rollers, groove matched to Ø1.3125:
 | Inner (stacked above and below the beam) | 0.45 | 0.52 | 0.36 |
 | Outer | 0.45 | 0.52 | 0.30 |
 
-Radial gap from groove to rail is 0.012. Inner axle centers are at X = ±19.232. Outer axle centers are at X = ±21.468.
+Radial gap from groove to rail is 0.012. Inner axle centers are at X = ±21.182. Outer axle centers are at X = ±23.418. The outer flanges reach about X = ±23.94.
 
 Carriage crowned rollers, groove matched to Ø1.125:
 
@@ -72,9 +72,11 @@ Each lower wheel is on a short axle that runs in from the outside cheek and stop
 
 ## Belts and pinions
 
-GT2 pitch is 2 mm (0.0787 in). A 20-tooth pinion has pitch radius 0.251 in.
+GT2 pitch, used on the horizontal belt, is 2 mm (0.0787 in). A 20-tooth pinion has pitch radius 0.251 in.
 
-Vertical drive: a Ø0.25 axle runs inside the front beam at Y = −1.80. A 20-tooth pinion at each rail drives the fixed belt. Idlers ride the smooth back. The vertical NEMA 17 is on the right, shaft pointing inboard, coupled directly to the axle. Both ends of the gantry have the same motor mount so the motor can sit on either side.
+The vertical belts are 15 mm wide and 3 mm pitch. A 6 mm, 2 mm printer belt is not enough for this climb: the heavier side carries about 8 kg (78 N) all the time, and a printer belt is meant to run near a 30 N install tension. A 16-tooth pinion has pitch radius 0.301 in.
+
+Vertical drive: a Ø0.25 timing rod runs inside the front beam at Y = −1.80 and carries one of those pinions at each rail. Idlers ride the smooth back and are wide enough for the 15 mm belt. A 20-tooth worm wheel sits on that rod just to the right of the right pinion. A 4-start worm stands upright in front of the beam, shaft up, for a 5:1 reduction, and a NEMA 17 hangs under it. The wider pinion shifts that motor out to about X 22.06–23.73, still inside the frame, and the larger wheel drops the body to clear the wheel, about Y −3.27 to −1.61. At about 600 rpm the gantry rises at 3.8 in/s. The worm backdrives, so the motor holds the gantry. Both ends of the gantry still have the same belt-pinion mount.
 
 Horizontal drive: the belt motor sits on the left of the carriage. Its shaft is just outside the left upper wheel axle (X = −1.35) and the inner idler is just inside that axle, so the axle is between them. The belt runs above the upper wheel axles, teeth toward the front beam, idlers on the smooth back. The motor center is 1.694 in left of the carriage center.
 
@@ -96,7 +98,11 @@ Tilt motor: NEMA 17 pancake. Same face and mounting pattern. Body depth 23 mm (0
 
 ## End brackets
 
-One bracket per gantry end, thickness 0.16, height 1.92 (half-height 0.96). It is a U open toward the vertical beam, with the outer-wheel leg on the motor plate. The drive axle passes through the inner wall. The outer plate has the NEMA 17 hole pattern and a center hole for the shaft boss. Four screw heads sit on the inboard face.
+Both ends are the same six-sided box, plate thickness 0.16. The walls are the inboard face, the outboard face, the back, the front, the top, and the bottom. The drive axle passes through the inboard wall. Idler axles run from the inboard wall to the outboard wall. The upper idler is a slot through the top edge of the back wall. The lower idler is a slot through the bottom edge. Each slot is only as deep as the back face.
+
+The right bottom face carries the upright NEMA 17. The left box is the mirror of the right box and has no motor.
+
+Each outer wheel axle runs through a block that protrudes from the back face, outboard of the vertical beam.
 
 ## Carriage
 
@@ -123,7 +129,9 @@ At 45° the lens stays about 0.33 in under the upper yoke bar and about 0.66 in 
 
 ## Motion
 
-One loop, `Loop_Box`, 24 fps, linear keys, frames 0–280. The first frame and the last frame are the same pose, so playback wraps without a jump.
+One loop, `Loop_Box`, 24 fps, linear keys, frames 0–1046. The first frame and the last frame are the same pose, so playback wraps without a jump.
+
+Vertical legs run at 3.8 in/s, the speed of the 5:1 worm and the 16-tooth, 3 mm pinion with the NEMA 17 near 600 rpm. A full rise or drop is 390 frames (16.3 s). Horizontal legs run at 15.7 in/s, a direct 20-tooth pinion at that same motor speed, and take 53 frames. When a leg moves both axes it lasts as long as the slower axis.
 
 Order of corners: bottom-left, top-left, top-right, bottom-right, then back to bottom-left. At each corner the carriage holds still while pan and tilt trace the full ±45° square:
 
@@ -133,7 +141,7 @@ Order of corners: bottom-left, top-left, top-right, bottom-right, then back to b
 4. Pan −45°, tilt +45°
 5. Pan −45°, tilt −45°
 
-Each of those steps is 10 frames. Travel from one corner to the next is 30 frames, with pan and tilt held at −45°.
+Each of those steps is 10 frames. Between corners, pan and tilt stay at −45° while the carriage travels at the speeds above.
 
 Rollers and pinions spin with travel: angle = distance / pitch radius. Belt array lengths follow the gantry.
 
@@ -143,5 +151,5 @@ Rollers and pinions spin with travel: angle = distance / pitch radius. Belt arra
 | --- | --- |
 | `scripts/build_gantry.py` | Builds the scene |
 | `planar_stage.blend` | Saved scene, frame 0 |
-| `renders/gantry_still.png` | Three-quarter still |
-| `renders/pose_BL.png`, `pose_TL.png`, `pose_TR.png`, `pose_BR.png` | The four corners |
+| `docs/window_gantry_1.png` | Carriage, camera, and left end bracket |
+| `docs/window_gantry_2.png` | Right end bracket, lift motor, and outer wheel |

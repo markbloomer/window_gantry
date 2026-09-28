@@ -14,11 +14,13 @@ from mathutils.bvhtree import BVHTree
 
 H_LO, H_HI = 8.39, 69.78
 # Pancake tilt motor (23 mm) is the left-side limit. The right rail
-# is still set by the camera swing.
-X_LO, X_HI = -15.82, 15.16
+# is still set by the camera swing. Both rails moved out with the beams.
+X_LO, X_HI = -17.77, 17.11
 
 VB_R = 1.3125 / 2
-VB_X = 20.35
+# As far out as the outer rollers allow, just inside the 48 in width.
+# The lift motor hangs forward of the frame instead of using this space.
+VB_X = 22.30
 VB_Y = -0.40
 
 HB_R = 1.125 / 2
@@ -32,13 +34,20 @@ BAR_R = 0.125
 
 GT2 = 2.0 / 25.4
 
-def pitch_radius(teeth):
-    return teeth * GT2 / (2 * math.pi)
+def pitch_radius(teeth, pitch=None):
+    return teeth * (GT2 if pitch is None else pitch) / (2 * math.pi)
 
 PR20 = pitch_radius(20)
+# Vertical climb uses a 15 mm, 3 mm-pitch belt (3MGT-15). A 6 mm, 2 mm
+# printer belt is sized for a print head, not this gantry. The horizontal
+# belt still carries only the carriage, so it stays 6 mm GT2.
+VBELT_PITCH = 3.0 / 25.4
+VBELT_W = 15.0 / 25.4
+VBELT_TEETH = 16
+VPR = pitch_radius(VBELT_TEETH, VBELT_PITCH)
 
 # Inner wheels stack above and below on axles that sit on the beams.
-# Each outer wheel hangs from the L-bracket at that end of the front beam.
+# Each outer wheel is carried by a block on the end bracket.
 VR_RC, VR_RF = 0.45, 0.52
 VR_HW_IN, VR_HW_OUT = 0.36, 0.30
 VR_GAP = 0.012
@@ -70,9 +79,6 @@ HB_Y_F = HP_Y - HM_SQ / 2 - BEAM_CLEAR - HB_R
 HB_Y_R = HP_Y + HM_SQ / 2 + BEAM_CLEAR + HB_R
 # Shaft points up. Body bottom rests on the truck plate.
 HM_TOP = 0.41
-
-# Vertical motor fastens to the right L-bracket. Shaft face, body toward +X.
-VM_FACE_X = 21.22
 
 HOME_H = H_LO
 HOME_X = X_LO
@@ -242,6 +248,177 @@ def roller(name, rc, rf, rb, half_w, axis, coll, mat, gap=0.012, bore=0.09):
     return lathe(name, pts, 48, axis, coll, mat, smooth=True)
 
 
+def spur_gear(name, teeth, module, face, bore, coll, mat, phase=0.0):
+    """Spur gear. Module is inches. Thickness is along local X, the spin axis."""
+    pitch_r = teeth * module / 2.0
+    tip_r = pitch_r + module
+    root_r = max(bore + 0.03, pitch_r - 1.25 * module)
+    hw = face / 2.0
+    bm = bmesh.new()
+    segs = max(48, teeth * 2)
+
+    def ring(r, x):
+        return [
+            bm.verts.new((
+                x,
+                r * math.cos(math.tau * i / segs),
+                r * math.sin(math.tau * i / segs),
+            ))
+            for i in range(segs)
+        ]
+
+    outer_a, outer_b = ring(root_r, -hw), ring(root_r, hw)
+    inner_a, inner_b = ring(bore, -hw), ring(bore, hw)
+    for i in range(segs):
+        j = (i + 1) % segs
+        bm.faces.new((outer_a[i], outer_a[j], outer_b[j], outer_b[i]))
+        bm.faces.new((inner_b[i], inner_b[j], inner_a[j], inner_a[i]))
+        bm.faces.new((outer_a[i], inner_a[i], inner_a[j], outer_a[j]))
+        bm.faces.new((outer_b[j], inner_b[j], inner_b[i], outer_b[i]))
+    ang = math.pi / (2.0 * teeth) * 0.90
+    for n in range(teeth):
+        a = phase + n * math.tau / teeth
+        tooth = bmesh.new()
+        verts = []
+        for x in (-hw, hw):
+            for da, rad in (
+                (-ang * 1.2, root_r * 0.98),
+                (-ang * 0.55, tip_r),
+                (ang * 0.55, tip_r),
+                (ang * 1.2, root_r * 0.98),
+            ):
+                th = a + da
+                verts.append((x, rad * math.cos(th), rad * math.sin(th)))
+        tv = [tooth.verts.new(c) for c in verts]
+        tooth.verts.ensure_lookup_table()
+        for f in (
+            (0, 1, 2, 3),
+            (4, 7, 6, 5),
+            (0, 4, 5, 1),
+            (1, 5, 6, 2),
+            (2, 6, 7, 3),
+            (3, 7, 4, 0),
+        ):
+            tooth.faces.new([tv[k] for k in f])
+        tooth_me = bpy.data.meshes.new(name + "_tt")
+        tooth.to_mesh(tooth_me)
+        tooth.free()
+        bm.from_mesh(tooth_me)
+        bpy.data.meshes.remove(tooth_me)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    return new_object(name, me, coll, mat, smooth=False)
+
+
+def worm_screw(name, starts, lead, length, root_r, crest_r, coll, mat, samples=72):
+    """Cylindrical worm. Axis is local Y."""
+    bm = bmesh.new()
+    segs = 28
+    hw = length / 2.0
+
+    def ring(r, y):
+        return [
+            bm.verts.new((
+                r * math.cos(math.tau * i / segs),
+                y,
+                r * math.sin(math.tau * i / segs),
+            ))
+            for i in range(segs)
+        ]
+
+    cap_a, cap_b = ring(root_r, -hw), ring(root_r, hw)
+    for i in range(segs):
+        j = (i + 1) % segs
+        bm.faces.new((cap_a[i], cap_a[j], cap_b[j], cap_b[i]))
+        if i == 0:
+            bm.faces.new(tuple(reversed(cap_a)))
+            bm.faces.new(tuple(cap_b))
+    width = 0.42 * lead / starts
+    for s in range(starts):
+        cols = []
+        for i in range(samples + 1):
+            y = -hw + length * i / samples
+            ang = (y + hw) / lead * math.tau + s * math.tau / starts
+            ca, sa = math.cos(ang), math.sin(ang)
+            dy = width / 2.0
+            cols.append([
+                bm.verts.new((root_r * ca, y - dy, root_r * sa)),
+                bm.verts.new((crest_r * ca, y - dy * 0.30, crest_r * sa)),
+                bm.verts.new((crest_r * ca, y + dy * 0.30, crest_r * sa)),
+                bm.verts.new((root_r * ca, y + dy, root_r * sa)),
+            ])
+        for i in range(samples):
+            c0, c1 = cols[i], cols[i + 1]
+            for k in range(4):
+                k2 = (k + 1) % 4
+                bm.faces.new((c0[k], c1[k], c1[k2], c0[k2]))
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    return new_object(name, me, coll, mat, smooth=False)
+
+
+def worm_wheel(name, teeth, pitch_r, face, bore, twist, coll, mat):
+    """Worm wheel. Axis is local X. `twist` is radians of tooth slant per inch of face."""
+    tip_r = pitch_r + 0.055
+    root_r = max(bore + 0.03, pitch_r - 0.07)
+    hw = face / 2.0
+    bm = bmesh.new()
+    segs = max(48, teeth * 2)
+
+    def ring(r, x):
+        return [
+            bm.verts.new((
+                x,
+                r * math.cos(math.tau * i / segs),
+                r * math.sin(math.tau * i / segs),
+            ))
+            for i in range(segs)
+        ]
+
+    outer_a, outer_b = ring(root_r, -hw), ring(root_r, hw)
+    inner_a, inner_b = ring(bore, -hw), ring(bore, hw)
+    for i in range(segs):
+        j = (i + 1) % segs
+        bm.faces.new((outer_a[i], outer_a[j], outer_b[j], outer_b[i]))
+        bm.faces.new((inner_b[i], inner_b[j], inner_a[j], inner_a[i]))
+        bm.faces.new((outer_a[i], inner_a[i], inner_a[j], outer_a[j]))
+        bm.faces.new((outer_b[j], inner_b[j], inner_b[i], outer_b[i]))
+    ang = math.pi / (2.0 * teeth) * 0.85
+    for n in range(teeth):
+        a0 = n * math.tau / teeth + math.pi
+        tooth = bmesh.new()
+        verts = []
+        for x in (-hw, hw):
+            a = a0 + twist * x
+            edge = (x / hw) ** 2
+            rt = tip_r - 0.04 * edge
+            rr = root_r
+            for da, rad in ((-ang * 1.15, rr), (-ang * 0.45, rt), (ang * 0.45, rt), (ang * 1.15, rr)):
+                th = a + da
+                verts.append((x, rad * math.cos(th), rad * math.sin(th)))
+        tv = [tooth.verts.new(c) for c in verts]
+        tooth.verts.ensure_lookup_table()
+        for f in (
+            (0, 1, 2, 3), (4, 7, 6, 5),
+            (0, 4, 5, 1), (1, 5, 6, 2), (2, 6, 7, 3), (3, 7, 4, 0),
+        ):
+            tooth.faces.new([tv[k] for k in f])
+        tooth_me = bpy.data.meshes.new(name + "_tt")
+        tooth.to_mesh(tooth_me)
+        tooth.free()
+        bm.from_mesh(tooth_me)
+        bpy.data.meshes.remove(tooth_me)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    return new_object(name, me, coll, mat, smooth=False)
+
+
 def flanged_pulley(name, tip_r, flange_r, width, hole_r, steps, axis, coll, mat):
     ft = 0.04
     hw = width / 2
@@ -259,11 +436,12 @@ def flanged_pulley(name, tip_r, flange_r, width, hole_r, steps, axis, coll, mat)
     return lathe(name, profile, steps, axis, coll, mat, smooth=False)
 
 
-def belt_tooth(name, along, teeth, coll, mat, width=0.22):
-    """One GT2 pitch. `teeth` is '-Y' (vertical belts) or '+Y' (horizontal belt)."""
-    pitch = GT2
-    back = 0.020
-    tooth = 0.026
+def belt_tooth(name, along, teeth, coll, mat, width=0.22, pitch=None):
+    """One belt pitch. `teeth` is '-Y' (vertical belts) or '+Y' (horizontal belt)."""
+    pitch = GT2 if pitch is None else pitch
+    scale = pitch / GT2
+    back = 0.020 * scale
+    tooth = 0.026 * scale
     bm = bmesh.new()
     bmesh.ops.create_cube(bm, size=1.0)
     bm2 = bmesh.new()
@@ -422,12 +600,13 @@ def _unit2(x, y):
     return x / L, y / L
 
 
-def belt_mesh(name, pts, width_axis, tooth_sign, coll, mat):
+def belt_mesh(name, pts, width_axis, tooth_sign, coll, mat, half_w=0.10, pitch=None):
     """One belt along a 3D centerline. `width_axis` is the belt width direction.
     Teeth lie on the `tooth_sign` side of (tangent cross width_axis)."""
-    back = 0.020
-    tooth_h = 0.024
-    half_w = 0.10
+    pitch = GT2 if pitch is None else pitch
+    scale = pitch / GT2
+    back = 0.020 * scale
+    tooth_h = 0.024 * scale
     waxis = Vector(width_axis).normalized()
     bm = bmesh.new()
 
@@ -468,9 +647,9 @@ def belt_mesh(name, pts, width_axis, tooth_sign, coll, mat):
         bm.faces.new(rings[0])
         bm.faces.new(list(reversed(rings[-1])))
 
-    # Teeth at each GT2 of arc length, sitting on the pitch face.
+    # Teeth at each pitch of arc length, sitting on the pitch face.
     dist = 0.0
-    next_tooth = GT2 * 0.5
+    next_tooth = pitch * 0.5
     for i in range(len(pts) - 1):
         seg = pts[i + 1] - pts[i]
         seglen = seg.length
@@ -483,7 +662,7 @@ def belt_mesh(name, pts, width_axis, tooth_sign, coll, mat):
             tooth_n = n * tooth_sign
             bw = half_w * 0.72
             th = tooth_h
-            tl = GT2 * 0.28
+            tl = pitch * 0.28
             corners = []
             for su in (-bw, bw):
                 for ss in (-tl, tl):
@@ -502,7 +681,7 @@ def belt_mesh(name, pts, width_axis, tooth_sign, coll, mat):
             )
             for fidx in faces:
                 bm.faces.new(tuple(corners[k] for k in fidx))
-            next_tooth += GT2
+            next_tooth += pitch
         dist += seglen
 
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
@@ -553,9 +732,9 @@ def vertical_wrap_pts(x, z0):
     rail belt and the pinion. Returns the centerline, the lower kiss Z
     relative to z0, and the idler Y.
     """
-    rp = PR20 - 0.004
+    rp = VPR
     ri = 0.12
-    yb = VB_Y - VB_R - 0.032
+    yb = VB_Y - VB_R - 0.050
     py = AXLE_Y
     iy = yb - ri
     iz = 0.72
@@ -645,7 +824,6 @@ def build():
     cube_mat = make_mat("Payload", (0.86, 0.30, 0.04), 0.0, 0.38)
     floor_mat = make_mat("Floor", (0.62, 0.63, 0.65), 0.0, 0.85)
     dark_metal = make_mat("DarkMetal", (0.10, 0.10, 0.11), 0.85, 0.32)
-    brass = make_mat("Brass", (0.55, 0.42, 0.18), 1.0, 0.28)
 
     h = HOME_H
     cx = HOME_X
@@ -666,24 +844,30 @@ def build():
 
     # Rail belt pitch line, just in front of the beam. Split into the run
     # below the gantry and the run above it; the wrap between them moves with H.
-    yb = VB_Y - VB_R - 0.032
+    yb = VB_Y - VB_R - 0.050
     _, kiss_z, v_iy = vertical_wrap_pts(VB_X, 0.0)
     v_low = {}
     v_high = {}
     for sign, side in ((1, "R"), (-1, "L")):
-        low = belt_tooth(f"F_VBelt_{side}_low", "Z", "+Y", frame, belt_mat)
+        low = belt_tooth(
+            f"F_VBelt_{side}_low", "Z", "+Y", frame, belt_mat,
+            width=VBELT_W, pitch=VBELT_PITCH,
+        )
         low.location = (sign * VB_X, yb, 0.70)
-        array_along(low, max(GT2, (h + kiss_z) - 0.70), (0, 0, 1))
+        array_along(low, max(VBELT_PITCH, (h + kiss_z) - 0.70), (0, 0, 1))
         v_low[side] = low
-        high = belt_tooth(f"F_VBelt_{side}_high", "Z", "+Y", frame, belt_mat)
+        high = belt_tooth(
+            f"F_VBelt_{side}_high", "Z", "+Y", frame, belt_mat,
+            width=VBELT_W, pitch=VBELT_PITCH,
+        )
         high.location = (sign * VB_X, yb, h - kiss_z)
-        array_along(high, max(GT2, 71.15 - (h - kiss_z)), (0, 0, 1))
+        array_along(high, max(VBELT_PITCH, 71.15 - (h - kiss_z)), (0, 0, 1))
         v_high[side] = high
         for zend, tag in ((0.62, "bot"), (71.28, "top")):
             box(
                 f"F_Clamp_{side}_{tag}",
-                (0.36, 0.10, 0.22),
-                (sign * VB_X, yb - 0.04, zend),
+                (VBELT_W + 0.12, 0.12, 0.22),
+                (sign * VB_X, yb - 0.05, zend),
                 frame, aluminum,
             )
 
@@ -750,9 +934,10 @@ def build():
                         "Z", gantry_c, steel, verts=12,
                     )
 
-    # Outer wheel hangs on the L-bracket. The axle stops just past the wheel.
+    # Outer wheel axle starts inside the block on the back of the end bracket.
     x_out = VB_X + VR_D
-    out_y0, out_y1 = -0.88, 0.00
+    out_y0 = (VB_Y - VB_R - 0.06) + 0.05
+    out_y1 = 0.00
     out_len = out_y1 - out_y0
     out_yc = (out_y0 + out_y1) / 2
     for sign, side in ((1, "R"), (-1, "L")):
@@ -770,120 +955,217 @@ def build():
         tag_spin(rol, 1, gain, "H")
 
     # --- drives ---
+    # 5:1 worm. The 16-tooth, 3 mm-pitch pinions are larger than the old
+    # 20-tooth GT2 pinions, so the wheel went from 16 teeth to 20 (still a
+    # 4-start worm) to keep the NEMA 17 inside its torque at 600 rpm.
+    # The wheel sits on the rod just to the right of the right belt pinion.
+    # The motor stands upright under that wheel, forward of the vertical beam.
+    worm_teeth, worm_starts = 20, 4
+    wheel_pr, worm_pr = 0.40, 0.36
+    worm_circ = 2.0 * math.pi * wheel_pr / worm_teeth
+    worm_lead = worm_starts * worm_circ
+    worm_cd = wheel_pr + worm_pr - 0.12
+    wheel_face = 0.38
+    worm_len = 0.62
+    pin_w = VBELT_W + 0.06
+    wheel_x = VB_X + pin_w / 2.0 + 0.08 + wheel_face / 2.0
+    rod_x0 = -(wheel_x + wheel_face / 2.0 + 0.05)
+    rod_x1 = wheel_x + wheel_face / 2.0 + 0.05
+    worm_y = AXLE_Y - worm_cd
     axle = cylinder(
-        "G_Axle", AXLE_R, 41.56,
-        (0.0, AXLE_Y, h), "X", drives, steel, verts=24,
+        "G_Axle", AXLE_R, rod_x1 - rod_x0,
+        ((rod_x0 + rod_x1) / 2.0, AXLE_Y, h), "X", drives, steel, verts=24,
     )
-    tag_spin(axle, 0, 1.0 / PR20, "H")
+    tag_spin(axle, 0, 1.0 / VPR, "H")
 
-    tip = PR20 - 0.004
+    tip = VPR - 0.015
     pinions = []
     for sign, side in ((1, "R"), (-1, "L")):
         pin = flanged_pulley(
-            f"G_VPinion_{side}", tip, 0.27, 0.32, AXLE_R + 0.015,
-            20, "X", drives, dark_metal,
+            f"G_VPinion_{side}", tip, tip + 0.08, pin_w, AXLE_R + 0.015,
+            VBELT_TEETH, "X", drives, dark_metal,
         )
         pin.location = (sign * VB_X, AXLE_Y, h)
         pinions.append(pin)
         pts, _, _ = vertical_wrap_pts(sign * VB_X, h)
-        belt_mesh(f"G_VWrap_{side}", pts, (1, 0, 0), 1.0, drives, belt_mat)
+        belt_mesh(
+            f"G_VWrap_{side}", pts, (1, 0, 0), 1.0, drives, belt_mat,
+            half_w=VBELT_W / 2.0, pitch=VBELT_PITCH,
+        )
         for zc, tag in ((h + kiss_z, "lo"), (h - kiss_z, "hi")):
             idler = flanged_pulley(
-                f"G_VIdler_{side}_{tag}", 0.12, 0.14, 0.28, 0.05,
+                f"G_VIdler_{side}_{tag}", 0.12, 0.16, VBELT_W + 0.08, 0.05,
                 16, "X", drives, dark_metal,
             )
             idler.location = (sign * VB_X, v_iy, zc)
             tag_spin(idler, 0, -1.0 / 0.12, "H")
 
-    # One bracket per end: a U of one thickness and height, open toward
-    # the rail, with the outer-wheel leg on the motor plate. The drive
-    # axle passes through the inner end. Both ends carry the NEMA 17
-    # pattern so the motor can mount on either side.
+    # Both ends are the same six-sided box. The right bottom face carries
+    # the lift motor. The left box is the mirror and has no motor. Each
+    # outer wheel axle runs through a block on the back face.
     T = 0.16
-    ZH = 0.96
-    y_closed = AXLE_Y - HM_SQ / 2 - 0.12
-    y_open = -1.12
-    y_motor = AXLE_Y + HM_SQ / 2 + 0.12
+    idler_clear = 0.16 + 0.10
     nema = 31.0 / 25.4 / 2
+    idler_lo_z = h + kiss_z
+    idler_hi_z = h - kiss_z
+    pulley_hx = (VBELT_W + 0.08) / 2.0 + 0.10
+    right_z_bot = idler_lo_z - idler_clear - 0.15
+    right_z_top = idler_hi_z + idler_clear + 0.15
+    beam_front_y = VB_Y - VB_R
+    right_back_y1 = beam_front_y - 0.06
+    right_back_y0 = right_back_y1 - T
+    right_x0 = HB_X1_F + 0.06
+    right_x1 = wheel_x + HM_SQ / 2.0 + 0.02
+    right_y0 = worm_y - HM_SQ / 2.0 - 0.02
     for sign, side in ((1, "R"), (-1, "L")):
-        beam_end = x_in + 0.46
-        in_c = sign * (beam_end + T / 2 - 0.02)
-        out_c = sign * (VM_FACE_X - 0.02 - T / 2)
+        x_inboard = sign * right_x0
+        x_outboard = sign * right_x1
+        x_min, x_max = min(x_inboard, x_outboard), max(x_inboard, x_outboard)
+        z_lo, z_hi = right_z_bot - 0.02, right_z_top + 0.02
+        zc = (z_lo + z_hi) / 2.0
+        zh = z_hi - z_lo
+        y_span = right_back_y1 - right_y0
+        yc = (right_y0 + right_back_y1) / 2.0
+        xc = (x_min + x_max) / 2.0
+        xw = x_max - x_min
         inner = box(
             f"G_Bracket_{side}_in",
-            (T, y_open - y_closed, ZH * 2),
-            (in_c, (y_closed + y_open) / 2, h),
+            (T, y_span, zh),
+            (x_inboard + sign * T / 2.0, yc, zc),
+            gantry_c, aluminum,
+        )
+        outer = box(
+            f"G_Bracket_{side}_out",
+            (T, y_span, zh),
+            (x_outboard - sign * T / 2.0, yc, zc),
+            gantry_c, aluminum,
+        )
+        back = box(
+            f"G_Bracket_{side}_back",
+            (xw, T, zh),
+            (xc, right_back_y0 + T / 2.0, zc),
+            gantry_c, aluminum,
+        )
+        box(
+            f"G_Bracket_{side}_front",
+            (xw, T, zh),
+            (xc, right_y0 + T / 2.0, zc),
+            gantry_c, aluminum,
+        )
+        top = box(
+            f"G_Bracket_{side}_top",
+            (xw, y_span, T),
+            (xc, yc, right_z_top + T / 2.0),
+            gantry_c, aluminum,
+        )
+        bot = box(
+            "G_VPlate" if side == "R" else "G_Bracket_L_bot",
+            (xw, y_span, T),
+            (xc, yc, right_z_bot - T / 2.0),
             gantry_c, aluminum,
         )
         subtract(inner, cylinder(
             f"cut_bin_{side}", 0.18, T + 0.2,
-            (in_c, AXLE_Y, h), "X", cuts, steel, verts=16,
+            (x_inboard + sign * T / 2.0, AXLE_Y, h), "X", cuts, steel, verts=16,
         ))
-        outer = box(
-            f"G_Bracket_{side}",
-            (T, y_motor - y_closed, ZH * 2),
-            (out_c, (y_closed + y_motor) / 2, h),
-            gantry_c, aluminum,
-        )
-        subtract(outer, cylinder(
-            f"cut_bout_{side}", 0.46, T + 0.2,
-            (out_c, AXLE_Y, h), "X", cuts, steel, verts=16,
-        ))
-        for iy, iz, tag in (
-            (-nema, -nema, "a"), (nema, -nema, "b"),
-            (-nema, nema, "c"), (nema, nema, "d"),
+        # Slots open through the top and bottom edges of the back wall.
+        # The opening is only as deep as that face.
+        slot_y0 = right_back_y0 - 0.02
+        slot_y1 = right_back_y1 + 0.04
+        for z_a, z_b, tag, extra in (
+            (idler_hi_z - idler_clear, right_z_top + T + 0.3, "hi", top),
+            (right_z_bot - T - 0.3, idler_lo_z + idler_clear, "lo", bot),
         ):
-            subtract(outer, cylinder(
-                f"cut_nema_{side}_{tag}", 0.067, T + 0.2,
-                (out_c, AXLE_Y + iy, h + iz), "X", cuts, steel, verts=12,
-            ))
+            for target, piece in ((back, "back"), (extra, "cap")):
+                subtract(target, box(
+                    f"cut_idl_{side}_{tag}_{piece}",
+                    (pulley_hx * 2.0, slot_y1 - slot_y0, z_b - z_a),
+                    (sign * VB_X, (slot_y0 + slot_y1) / 2.0, (z_a + z_b) / 2.0),
+                    cuts, steel,
+                ))
+        for z_ax, tag in ((idler_lo_z, "lo"), (idler_hi_z, "hi")):
+            for plate, px in (
+                (inner, x_inboard + sign * T / 2.0),
+                (outer, x_outboard - sign * T / 2.0),
+            ):
+                subtract(plate, cylinder(
+                    f"cut_idlax_{side}_{tag}_{plate.name.split('_')[-1]}", 0.055, T + 0.2,
+                    (px, v_iy, z_ax), "X", cuts, steel, verts=12,
+                ))
             cylinder(
-                f"G_BracketScrew_{side}_{tag}", 0.10, 0.06,
-                (out_c - sign * (T / 2 + 0.03), AXLE_Y + iy, h + iz),
-                "X", gantry_c, steel, verts=12,
+                f"G_VIdlerAxle_{side}_{tag}", 0.04, xw,
+                (xc, v_iy, z_ax), "X", gantry_c, steel, verts=12,
             )
-        box(
-            f"G_Bracket_{side}_back",
-            (abs(out_c - in_c) + T, T, ZH * 2),
-            ((in_c + out_c) / 2, y_closed + T / 2, h),
+        ax = sign * x_out
+        blk_in = ax - sign * 0.40
+        beam_face = sign * (VB_X + VB_R + 0.08)
+        if sign > 0:
+            blk_x0, blk_x1 = max(blk_in, beam_face), x_outboard
+        else:
+            blk_x0, blk_x1 = x_outboard, min(blk_in, beam_face)
+        blk_y0 = right_back_y1 - 0.05
+        blk_y1 = VB_Y - VR_HW_OUT - 0.08
+        blk = box(
+            f"G_WheelBlock_{side}",
+            (blk_x1 - blk_x0, blk_y1 - blk_y0, 0.92),
+            ((blk_x0 + blk_x1) / 2.0, (blk_y0 + blk_y1) / 2.0, h),
             gantry_c, aluminum,
         )
-        foot = box(
-            f"G_BracketFoot_{side}",
-            (0.64, T, ZH * 2),
-            (sign * 21.32, -0.84, h),
-            gantry_c, aluminum,
-        )
-        subtract(foot, cylinder(
-            f"cut_foot_{side}", 0.15, T + 0.2,
-            (sign * x_out, -0.84, h), "Y", cuts, steel, verts=16,
+        subtract(blk, cylinder(
+            f"cut_wblk_{side}", 0.16, (blk_y1 - blk_y0) + 0.3,
+            (ax, (blk_y0 + blk_y1) / 2.0, h), "Y", cuts, steel, verts=16,
         ))
-        x0 = in_c - sign * (T / 2)
-        x1 = out_c + sign * (T / 2)
-        for zc, tag in ((h + kiss_z, "lo"), (h - kiss_z, "hi")):
-            subtract(inner, cylinder(
-                f"cut_idl_{side}_{tag}_i", 0.055, T + 0.2,
-                (in_c, v_iy, zc), "X", cuts, steel, verts=12,
-            ))
-            subtract(outer, cylinder(
-                f"cut_idl_{side}_{tag}_o", 0.055, T + 0.2,
-                (out_c, v_iy, zc), "X", cuts, steel, verts=12,
-            ))
-            cylinder(
-                f"G_VIdlerAxle_{side}_{tag}", 0.04, abs(x1 - x0),
-                ((x0 + x1) / 2, v_iy, zc), "X", gantry_c, steel, verts=12,
-            )
 
-    coupler = cylinder(
-        "G_Coupler", 0.26, 0.26,
-        (20.69, AXLE_Y, h), "X", drives, brass, verts=24,
+    # Wheel on the rod. Worm stands upright, forward of the beam, and the
+    # motor hangs beneath it with the shaft up.
+    twist = worm_starts / (worm_teeth * worm_pr)
+    vwheel = worm_wheel(
+        "G_VWheel", worm_teeth, wheel_pr, wheel_face, AXLE_R + 0.01,
+        twist, drives, dark_metal,
     )
-    vm = nema_body("G_VMotor", "X", drives, motor_mat)
-    vm.location = (VM_FACE_X + HM_LEN / 2, AXLE_Y, h)
-    vm.rotation_euler[2] = math.pi  # shaft points inboard, toward -X
+    vwheel.location = (wheel_x, AXLE_Y, h)
+    vworm = worm_screw(
+        "G_VWorm", worm_starts, worm_lead, worm_len, worm_pr - 0.05,
+        worm_pr + 0.05, drives, dark_metal,
+    )
+    vworm.data.transform(Matrix.Rotation(math.pi / 2.0, 4, "X"))
+    vworm.data.update()
+    vworm.location = (wheel_x, worm_y, h)
+    tag_spin(vworm, 2, -(worm_teeth / float(worm_starts)) / VPR, "H")
+
+    # The motor bolts to the right bottom face. The left box has no motor.
+    plate_t = T
+    worm_bot = h - worm_len / 2.0
+    plate_top = right_z_bot
+    motor_face = plate_top - plate_t
+    motor_cz = motor_face - HM_LEN / 2.0
+    plate = bpy.data.objects["G_VPlate"]
+    subtract(plate, cylinder(
+        "cut_vplate_shaft", 0.48, plate_t + 0.2,
+        (wheel_x, worm_y, plate_top - plate_t / 2.0), "Z", cuts, steel, verts=16,
+    ))
+    for ix, iy, tag in (
+        (-nema, -nema, "a"), (nema, -nema, "b"),
+        (nema, nema, "c"), (-nema, nema, "d"),
+    ):
+        subtract(plate, cylinder(
+            f"cut_vplate_{tag}", 0.067, plate_t + 0.2,
+            (wheel_x + ix, worm_y + iy, plate_top - plate_t / 2.0),
+            "Z", cuts, steel, verts=12,
+        ))
+        cylinder(
+            f"G_VScrew_{tag}", 0.10, 0.06,
+            (wheel_x + ix, worm_y + iy, plate_top + 0.03),
+            "Z", gantry_c, steel, verts=12,
+        )
+    vm = nema_body("G_VMotor", "Z", drives, motor_mat)
+    vm.location = (wheel_x, worm_y, motor_cz)
+    shaft_z0 = motor_face
+    shaft_z1 = worm_bot
     vshaft = cylinder(
-        "G_VShaft", 0.098, 0.55,
-        (21.05, AXLE_Y, h), "X", drives, steel, verts=16,
+        "G_VShaft", 0.098, max(0.04, shaft_z1 - shaft_z0),
+        (wheel_x, worm_y, (shaft_z0 + shaft_z1) / 2.0),
+        "Z", drives, steel, verts=16,
     )
 
     # Horizontal belt hangs between the upper inner wheel axles.
@@ -1063,8 +1345,8 @@ def build():
     bpy.context.view_layer.update()
     for pin in pinions:
         parent_keep(pin, axle)
-    parent_keep(coupler, axle)
-    parent_keep(vshaft, axle)
+    parent_keep(vwheel, axle)
+    parent_keep(vshaft, vworm)
     parent_keep(hshaft, hp)
 
     # Pan motor on its side, shaft toward the center. The exposed axle is
@@ -1289,6 +1571,12 @@ def build():
     # --- one loop around the travel box: BL, TL, TR, BR ----------------
     # Travel the box, and at each corner hold still while pan and tilt
     # each run through their full ±45 deg range.
+    # Vertical speed is the 5:1 worm and the 16-tooth, 3 mm pinion, with
+    # the NEMA 17 near 600 rpm. Horizontal is the direct 20-tooth GT2
+    # pinion at that same rpm.
+    # A leg that moves both axes takes as long as the slower one.
+    vert_ips = (600.0 / 60.0) / (worm_teeth / float(worm_starts)) * (VBELT_TEETH * VBELT_PITCH)
+    horiz_ips = (600.0 / 60.0) * (20.0 * GT2)
     corners = [
         (X_LO, H_LO),
         (X_LO, H_HI),
@@ -1302,7 +1590,9 @@ def build():
         for pd, td in sweep:
             keys.append((frame, x, hz, pd, td))
             frame += 10
-        frame = keys[-1][0] + 30
+        nxt = corners[i + 1] if i + 1 < len(corners) else (X_LO, H_LO)
+        dt = max(abs(nxt[1] - hz) / vert_ips, abs(nxt[0] - x) / horiz_ips)
+        frame = keys[-1][0] + max(1, int(round(dt * scene.render.fps)))
     keys.append((frame, X_LO, H_LO, -45, -45))
     scene.frame_end = keys[-1][0]
     loops = {"Loop_Box": keys}
@@ -1341,12 +1631,12 @@ def build():
                 obj.keyframe_insert("rotation_euler", index=axis, frame=frame_i)
             for side, low in v_low.items():
                 activate(low, act, slots)
-                low.modifiers["Array"].fit_length = max(GT2, (hz + kiss_z) - 0.70)
+                low.modifiers["Array"].fit_length = max(VBELT_PITCH, (hz + kiss_z) - 0.70)
                 low.keyframe_insert('modifiers["Array"].fit_length', frame=frame_i)
                 high = v_high[side]
                 activate(high, act, slots)
                 high.location.z = hz - kiss_z
-                high.modifiers["Array"].fit_length = max(GT2, 71.15 - (hz - kiss_z))
+                high.modifiers["Array"].fit_length = max(VBELT_PITCH, 71.15 - (hz - kiss_z))
                 high.keyframe_insert("location", index=2, frame=frame_i)
                 high.keyframe_insert('modifiers["Array"].fit_length', frame=frame_i)
             activate(hb_left, act, slots)
@@ -1513,14 +1803,19 @@ def build():
             if obj.name.startswith(("C_Cam", "C_Tilt", "C_Pan")):
                 continue
             x0, x1, y0, y1, z0, z1 = bounds(obj)
-            if x0 < -24.02 or x1 > 24.02 or y0 < -3.02 or y1 > 3.02 or z0 < -0.02 or z1 > 72.02:
+            # The upright lift motor hangs forward of the 6 in frame.
+            past_depth = y0 < -3.02 or y1 > 3.02
+            if obj.name.startswith(("G_VMotor", "G_VPlate", "G_VScrew", "G_VWorm", "G_VShaft")) or (
+                obj.name.startswith("G_Bracket_") and "_back" not in obj.name
+            ):
+                past_depth = False
+            if x0 < -24.02 or x1 > 24.02 or past_depth or z0 < -0.02 or z1 > 72.02:
                 env_hit.append(f"{tag} {obj.name} ({x0:.2f},{x1:.2f}) ({y0:.2f},{y1:.2f}) ({z0:.2f},{z1:.2f})")
         cam = bpy.data.objects["C_CamBody"]
         c0, c1, _, _, cz0, cz1 = bounds(cam)
         plate = bpy.data.objects["F_Plate_bottom"]
         _, _, _, _, _, pz1 = bounds(plate)
         report.append(f"{tag} cam_z {cz0:.3f} plate_top {pz1:.3f} gap {cz0 - pz1:.3f} cam_x {c0:.2f},{c1:.2f}")
-
     def overlaps(a, b):
         if a is None or b is None:
             return 0
@@ -1530,17 +1825,36 @@ def build():
         ("G_VPinion_R", "G_Beam_front"),
         ("G_VPinion_R", "F_VBeam_R"),
         ("G_Axle", "G_Beam_front"),
-        ("G_Coupler", "G_Beam_front"),
-        ("G_Coupler", "G_VMotor"),
+        ("G_VWheel", "G_VRoll_R_out"),
+        ("G_VWheel", "F_VBeam_R"),
+        ("G_VWheel", "G_BracketFoot_R"),
+        ("G_VWheel", "G_VPlate"),
+        ("G_VWheel", "G_Bracket_R_back"),
+        ("G_VWheel", "G_Bracket_R_in"),
+        ("G_VWorm", "G_VMotor"),
+        ("G_VWorm", "G_VPlate"),
         ("G_VMotor", "G_VRoll_R_out"),
         ("G_VMotor", "F_Plate_bottom"),
+        ("G_VMotor", "F_Plate_top"),
         ("G_VMotor", "G_Axle_R_out"),
-        ("G_VMotor", "G_Bracket_R"),
+        ("G_VMotor", "G_Bracket_R_back"),
         ("G_BracketFoot_R", "G_VRoll_R_out"),
         ("G_BracketFoot_R", "G_VMotor"),
-        ("G_Bracket_R", "G_VRoll_R_out"),
-        ("G_Bracket_R", "G_VMotor"),
-        ("G_VShaft", "G_Bracket_R"),
+        ("G_VShaft", "G_VPlate"),
+        ("G_VPlate", "G_VIdler_R_lo"),
+        ("G_VPlate", "G_VIdler_R_hi"),
+        ("G_VPlate", "G_VWrap_R"),
+        ("G_VPlate", "G_VPinion_R"),
+        ("G_VPlate", "G_VWheel"),
+        ("G_VPlate", "G_VRoll_R_out"),
+        ("G_VPlate", "F_VBeam_R"),
+        ("G_Bracket_R_in", "F_VBeam_R"),
+        ("G_Bracket_R_back", "F_VBeam_R"),
+        ("G_VPlate", "G_Beam_front"),
+        ("G_Bracket_R_in", "G_VWrap_R"),
+        ("G_Bracket_R_back", "G_VWrap_R"),
+        ("G_Bracket_R_back", "G_VRoll_R_out"),
+        ("G_Bracket_R_in", "G_VPinion_R"),
         ("C_HPinion", "G_Beam_front"),
         ("C_HMotor", "G_Beam_front"),
         ("C_HMotor", "G_Beam_rear"),
@@ -1578,6 +1892,15 @@ def build():
         ("C_HWrap", "C_Axle_hi_a"),
         ("C_HIdler_a", "C_Axle_hi_a"),
         ("G_Bracket_R_in", "G_VIdler_R_hi"),
+        ("G_Bracket_R_in", "G_VIdler_R_lo"),
+        ("G_Bracket_R_back", "G_VIdler_R_hi"),
+        ("G_Bracket_R_back", "G_VIdler_R_lo"),
+        ("G_Bracket_L_in", "G_VIdler_L_hi"),
+        ("G_Bracket_L", "G_VIdler_L_lo"),
+        ("G_Bracket_L_back", "G_VIdler_L_hi"),
+        ("G_VIdlerBoss_R_hi_i", "G_VIdler_R_hi"),
+        ("G_VIdlerBoss_R_hi_o", "G_VIdler_R_hi"),
+        ("G_VIdlerBoss_L_lo_i", "G_Beam_front"),
         ("G_Bracket_R_back", "G_VPinion_R"),
         ("G_BracketScrew_R_a", "G_VMotor"),
         ("G_VPinion_R", "G_Beam_front"),
@@ -1597,6 +1920,45 @@ def build():
         ("C_CamBody", "C_PanBar"),
         ("C_CamLens", "C_PanBar"),
     ]
+    for side in ("R", "L"):
+        walls = (
+            f"G_Bracket_{side}_in",
+            f"G_Bracket_{side}_out",
+            f"G_Bracket_{side}_back",
+            f"G_Bracket_{side}_front",
+            f"G_Bracket_{side}_top",
+            "G_VPlate" if side == "R" else "G_Bracket_L_bot",
+            f"G_WheelBlock_{side}",
+        )
+        near = (
+            f"G_VIdler_{side}_hi",
+            f"G_VIdler_{side}_lo",
+            f"G_VPinion_{side}",
+            f"G_VWrap_{side}",
+            f"F_VBeam_{side}",
+            f"G_VRoll_{side}_out",
+            "G_Beam_front",
+        )
+        for wall in walls:
+            for other in near:
+                pairs.append((wall, other))
+        pairs.append((f"G_WheelBlock_{side}", f"G_Axle_{side}_out"))
+        pairs.append((f"G_VIdlerAxle_{side}_lo", f"G_VPinion_{side}"))
+        pairs.append((f"G_VIdlerAxle_{side}_hi", f"G_VPinion_{side}"))
+    pairs.extend([
+        ("G_WheelBlock_R", "G_VMotor"),
+        ("G_WheelBlock_R", "G_VWheel"),
+        ("G_WheelBlock_R", "G_VWorm"),
+        ("G_Bracket_R_out", "G_VMotor"),
+        ("G_Bracket_R_front", "G_VMotor"),
+        ("G_Bracket_R_top", "G_VWheel"),
+        ("G_VIdlerAxle_R_lo", "G_VWheel"),
+        ("G_VIdlerAxle_R_hi", "G_VWheel"),
+        ("G_VIdlerAxle_R_lo", "G_VWorm"),
+        ("G_VWorm", "G_Bracket_R_back"),
+        ("G_VWorm", "G_Bracket_R_top"),
+        ("G_VWheel", "G_VPinion_R"),
+    ])
     angles = {"BL": (-45, -45), "TL": (-45, 45), "TR": (45, 45), "BR": (45, -45)}
     names = {o.name: o for o in bpy.data.objects}
     hit_n = 0
